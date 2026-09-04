@@ -180,3 +180,36 @@ scope is now:
 
 No RTP payloading, no new `DatagramSocket`, no custom demuxer — all removed
 from Phase 2/3 scope per the Phase 0 analysis.
+
+## 8. Phase 2 status: done
+
+Implemented on the `bridge-mode` branch of the fork,
+[github.com/mengelh/PixelPilot/tree/bridge-mode](https://github.com/mengelh/PixelPilot/tree/bridge-mode)
+(local checkout: `../PixelPilot/`, sibling to this repo):
+
+1. `wfb-ng` submodule bumped `0da5279` → `3504a38` (current upstream
+   `master`) — commit `aa232fc`.
+2. `variant` flavor dimension (`pixelpilot` / `bridge`) added to
+   `app/build.gradle`, exposing `BuildConfig.BRIDGE_MODE` — commit `2065620`.
+3. `VideoActivity.setupMavlink()` and the `videoPlayer.start()` /
+   `startAudio()` / `updateUdpForwardingState()` block in `onResume()` are
+   now gated on `!BuildConfig.BRIDGE_MODE` — same commit. `app/wfbngrtl8812`
+   untouched. The corresponding `stop()`/`stopAudio()`/`nativeStop()` calls
+   were left unguarded after confirming both are no-ops when the matching
+   start was skipped (`VideoPlayer.stop()` checks its `timer` for null;
+   `MavlinkNative.nativeStop()` only increments a signal counter).
+4. Build verified locally: set up a standalone Android SDK
+   (cmdline-tools 15859902, platform 34, build-tools 35.0.0, NDK r26b/
+   26.1.10909125 as pinned by `app/build.gradle`) and ran
+   `./gradlew assembleBridgeDebug assemblePixelpilotDebug`. **Both flavors
+   build successfully** — `app-bridge-debug.apk` and
+   `app-pixelpilot-debug.apk`, ~16.76 MB each (same size since `videonative`/
+   `mavlink` are still compiled into both flavors, per §2 — only gated at
+   runtime). All compiler warnings are pre-existing upstream code
+   (mediapipe, devourer), none introduced by this change.
+
+Not yet done (still needs the physical RTL8812AU + WiFiLink 2 hardware,
+out of scope for a code-only session): confirming with `netstat`/a UDP test
+client that nothing binds `127.0.0.1:5600`/`:14550` in the `bridge` flavor
+while wfb-ng still emits traffic to them, and the actual QGroundControl
+end-to-end test from Phase 5.
