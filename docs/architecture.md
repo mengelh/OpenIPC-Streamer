@@ -208,8 +208,48 @@ Implemented on the `bridge-mode` branch of the fork,
    runtime). All compiler warnings are pre-existing upstream code
    (mediapipe, devourer), none introduced by this change.
 
-Not yet done (still needs the physical RTL8812AU + WiFiLink 2 hardware,
-out of scope for a code-only session): confirming with `netstat`/a UDP test
-client that nothing binds `127.0.0.1:5600`/`:14550` in the `bridge` flavor
-while wfb-ng still emits traffic to them, and the actual QGroundControl
-end-to-end test from Phase 5.
+Not yet done: the actual QGroundControl end-to-end test from Phase 5.
+
+## 9. On-device testing found and fixed three more bugs
+
+Tested via wireless adb on a Galaxy Tab S7 FE (Android 13) with a real
+RTL8812AU dongle (`0BDA:8812`). All fixed on `bridge-mode`:
+
+1. **Launch crash — missing native libs.** `libusb1.0.so`/`libsodium.so`
+   (linked into `libWfbngRtl8812.so`) and `libopus.so` (linked into
+   `libVideoNative.so`) are referenced by absolute path in each module's
+   CMakeLists.txt but were never packaged into the APK — no `jniLibs` source
+   set picked them up. Pre-existing PixelPilot gap (confirmed on the plain
+   `pixelpilot` flavor too), only surfaced by a fresh install with nothing to
+   mask it. Fixed by copying the required prebuilts into
+   `src/main/jniLibs/<abi>/` for both modules (commit `5334188`).
+2. **Launch crash — hardcoded package path.** `WfbngLink.hpp` hardcoded the
+   `gs.key` path as `/data/user/0/com.openipc.pixelpilot/files/gs.key`. Works
+   for the `pixelpilot` flavor, but `bridge`'s `applicationIdSuffix` installs
+   it under `com.openipc.pixelpilot.bridge`, so the hardcoded path pointed at
+   a data directory that doesn't exist for this app -> `fopen()` failure ->
+   uncaught C++ exception -> abort. Fixed by resolving the path from
+   `context.getFilesDir()` via JNI at construction time instead (same
+   commit) -- this also fixes the underlying fragility for any future
+   rename/fork, not just our flavor.
+3. **Background-crash race, found via repeated pause/resume cycling.**
+   `onPause()`/`onStop()` call `wfbLinkManager.stopAdapters()`,
+   `onResume()` immediately calls `startAdapters()` again. Cycling this fast
+   hit a native teardown race in devourer's `RtlJaguarDevice` destructor
+   (`rtw_hal_deinit()` touching HAL state on a device that hadn't finished
+   bringing up yet) -> SIGSEGV/SIGABRT. Reproduced 2/3 on `bridge`, 0/6 on
+   plain `pixelpilot` (bridge's faster `onResume()`, from skipping the video
+   player, shifts the timing into the race window). Checked upstream
+   `OpenIPC/devourer`'s issue history (#281/#344/#350/#351 already hardened
+   this exact teardown path for other cases) -- this looks like a genuinely
+   new edge case, not a known/patched one, so patching a third-party driver
+   we don't own and can't reliably re-verify wasn't the right call. Fixed at
+   the integration layer instead: bridge mode now skips
+   `stopAdapters()` on pause/stop entirely, since not tearing the pipeline
+   down while backgrounded is the actual point of this project. Verified
+   with 5 rapid background/foreground cycles on-device (commit `cbb07c2`).
+   Still only survives ordinary lifecycle transitions, not memory-pressure
+   eviction -- Phase 4's Foreground Service remains necessary for
+   guaranteed long-running background survival.
+
+Updated test APK: `test_APK/app-bridge-debug.apk` on `bridge-mode`.
